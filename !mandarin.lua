@@ -809,6 +809,9 @@ menu = {
             custom_font                 = other_combo("\aCDCDCDFFCustom Watermark Flag", {"Nil","b"}),
             custom_size                 = other_combo("\aCDCDCDFFCustom Watermark Size", {"Nil","+", "-"}),
 
+            manual_arrows        = aa_checkbox("\aCDCDCDFFManual Arrows"),
+            manual_arrows_style  = aa_combo("\a323232FF•  \aCDCDCDFFArrow Style", {"Classic", "Rounded", "Simple", "Block"}),
+
             logs = aa_checkbox("\aCDCDCDFFEvent Logger"),
 
             damage_indicator = aa_checkbox("\aCDCDCDFFMinimum Damage Indicator"),
@@ -827,7 +830,7 @@ menu = {
 
             viewmodel_enable = aa_checkbox("\aCDCDCDFFViewmodel Changer"),
             viewmodel_in_scope = aa_checkbox("\a323232FF•  \aCDCDCDFFViewmodel in Scope"),
-            viewmodel_fov = aa_slider("\a323232FF-  \aCDCDCDFFViewmodel FOV", 0, 120, 68, true, "°", 1),
+            viewmodel_fov = aa_slider("\a323232FF•  \aCDCDCDFFViewmodel FOV", 0, 120, 68, true, "°", 1),
             viewmodel_x = aa_slider("\a323232FF•  \aCDCDCDFFViewmodel X", -20, 20, 0, true, "u", 1),
             viewmodel_y = aa_slider("\a323232FF•  \aCDCDCDFFViewmodel Y", -20, 20, 0, true, "u", 1),
             viewmodel_z = aa_slider("\a323232FF•  \aCDCDCDFFViewmodel Z", -20, 20, 0, true, "u", 1),
@@ -1311,6 +1314,49 @@ ui.set_callback(menu.aa.freestanding_checkbox,function(ref)
         ui.set(menu.aa.backward_checkbox,false)
     end
 end)
+-- Preset apply: sets values on ALL states instantly, no delay
+local function apply_preset_to_all_states(preset_name)
+    for k, v in pairs(alternative_conditions) do
+        local state_data = menu.aa[v]
+        if state_data and state_data.yaw then
+            local y = state_data.yaw
+            if preset_name == "Jitter" then
+                -- Jitter preset: offset jitter, static desync, no delay
+                pcall(ui.set, y.yaw_jitter,         "Offset")
+                pcall(ui.set, y.yaw_jitter_value_l,  37)
+                pcall(ui.set, y.yaw_jitter_value_r, -27)
+                pcall(ui.set, y.body_yaw,           "Static")
+                pcall(ui.set, y.body_yaw_value_l,   58)
+                pcall(ui.set, y.body_yaw_value_r,   58)
+                pcall(ui.set, y.delay1,              0)
+                pcall(ui.set, y.delay2,              0)
+                pcall(ui.set, y.delay3,              0)
+                pcall(ui.set, y.delay4,              0)
+                pcall(ui.set, y.delay5,              0)
+            elseif preset_name == "Dynamic" then
+                -- Dynamic preset: x-way, l/r desync, delay
+                pcall(ui.set, y.yaw_jitter,         "X-Way")
+                pcall(ui.set, y.xway_ways,           3)
+                pcall(ui.set, y.xway_angle,          116)
+                pcall(ui.set, y.body_yaw,           "L/R")
+                pcall(ui.set, y.body_yaw_value_l,   58)
+                pcall(ui.set, y.body_yaw_value_r,   58)
+                pcall(ui.set, y.delay1,              8)
+                pcall(ui.set, y.delay2,              0)
+                pcall(ui.set, y.delay3,              0)
+                pcall(ui.set, y.delay4,              0)
+                pcall(ui.set, y.delay5,              0)
+            end
+            -- "Custom" — do nothing, leave user values intact
+        end
+    end
+end
+
+ui.set_callback(menu.aa.preset, function(ref)
+    local preset_name = ui.get(ref)
+    apply_preset_to_all_states(preset_name)
+end)
+
 function extra_yaw(t, type, min, max)
     if type == "Spin" then
         local range = max - min
@@ -2016,6 +2062,9 @@ function dragging_system.render()
         if dragging_system.active_drag.lock_x ~= nil then
             dragging_system.active_drag.x = dragging_system.active_drag.lock_x
         end
+        if dragging_system.active_drag.lock_y ~= nil then
+            dragging_system.active_drag.y = dragging_system.active_drag.lock_y
+        end
         handle_snapping(dragging_system.active_drag, realtime)
     else
         for _, drag in pairs(dragging_system.draggings) do
@@ -2135,11 +2184,20 @@ xhair_wm.lock_x = 960
 local aurora_beta = dragging_system.create_drag(15, 500, 0, 0, "Right-click to change text font")
 aurora_beta.label_bottom = true
 
+-- Manual arrows drag zone (horizontal only — lock_y set every frame to screen_h/2)
+local arrow_drag = dragging_system.create_drag(890, 590, 80, 20, "This element is draggable!")
+arrow_drag.visible = false
+
 local xhair_smooth_x = 960
 local xhair_smooth_y = 580
 local xhair_side_anim = 0 
 
 ---
+
+local arrow_anim_l   = 0
+local arrow_anim_r   = 0
+local arrow_offset_l = 0
+local arrow_offset_r = 0
 
 local lwm_last_tick = 0
 local lua_maslo = 0.9
@@ -2177,10 +2235,11 @@ client.set_event_callback("paint_ui", function()
 
 ---
 
+    local wm_enabled = ui.get(menu.features.visuals.watermark_selection)
     cwm.visible = ui.get(menu.features.visuals.custom_watermark)
-    lwm.visible = contains(ui.get(menu.features.visuals.watermark_type), "Watermark")
+    lwm.visible = wm_enabled and contains(ui.get(menu.features.visuals.watermark_type), "Watermark")
     xhair_wm.visible = ui.get(menu.features.visuals.crosshair)
-    aurora_beta.visible = contains(ui.get(menu.features.visuals.watermark_type), "Text Watermark")
+    aurora_beta.visible = wm_enabled and contains(ui.get(menu.features.visuals.watermark_type), "Text Watermark")
 
 ---
 
@@ -2594,7 +2653,7 @@ if ui.get(menu.features.visuals.crosshair) then
 end
 
 
-bwm.visible = contains(ui.get(menu.features.visuals.watermark_type), "Brand Watermark") and not ui.get(menu.features.visuals.custom_watermark)
+bwm.visible = ui.get(menu.features.visuals.watermark_selection) and contains(ui.get(menu.features.visuals.watermark_type), "Brand Watermark") and not ui.get(menu.features.visuals.custom_watermark)
 
 if bwm.visible then
     local bx, by = bwm.x, bwm.y
@@ -2673,8 +2732,8 @@ end
 
         ---
 
-        local is_jitter = ui.get(menu.aa.preset) == "Jitter" or ui.get(menu.aa.preset) == 2
-        local is_dynamic = ui.get(menu.aa.preset) == "Dynamic" or ui.get(menu.aa.preset) == 3
+        local is_jitter = ui.get(menu.aa.preset) == "Jitter"
+        local is_dynamic = ui.get(menu.aa.preset) == "Dynamic"
 
         ---
 
@@ -2684,155 +2743,81 @@ end
                 local is_legacy    = ui.get(menu.aa.category) == "Legacy"
                 local base_yaw_cond = ui.get(menu.aa.state) == k and ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.type) == "Yaw"
 
-                depend_table(v.yaw,     base_yaw_cond and is_legacy)
+                depend_table(v.yaw,     base_yaw_cond and is_legacy and not is_jitter and not is_dynamic)
+
+                -- for jitter/dynamic presets: show only the core yaw direction (yaw_custom)
+                if base_yaw_cond and is_legacy and (is_jitter or is_dynamic) then
+                    ui.set_visible(v.yaw.yaw_custom, true)
+                    ui.set_visible(v.yaw.space, true)
+                end
                 depend_table(v.pitch, ui.get(menu.aa.state) == k and ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.type) == "Pitch")
                 depend_table(v.body_yaw, ui.get(menu.aa.state) == k and ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.type) == "Desync")
                 depend_table(v.settings, ui.get(menu.aa.state) == k and ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.category) == "Settings")
 
                 for i = 1,5 do
-                    depend_table(v.yaw["delay" .. i], is_legacy and ui.get(v.yaw.delay_ways) >= i and ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.type) == "Yaw" and ui.get(menu.aa.state) == k)
+                    depend_table(v.yaw["delay" .. i], is_legacy and not is_jitter and not is_dynamic and ui.get(v.yaw.delay_ways) >= i and ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.type) == "Yaw" and ui.get(menu.aa.state) == k)
                 end
 
-                depend_table(v.hidden.yaw, base_yaw_cond and is_defensive)
+                depend_table(v.hidden.yaw, base_yaw_cond and is_defensive and not is_jitter and not is_dynamic)
                 depend_table(v.hidden.pitch, ui.get(menu.aa.state) == k and ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.type) == "Pitch")
                 depend_table(v.hidden.body_yaw, ui.get(menu.aa.state) == k and ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.type) == "Anti-Aim's")
 
-                depend_table(v.yaw.yaw_value_l, is_legacy and base_yaw_cond and ui.get(v.yaw.yaw) == "L/R", (v.yaw.lr_checkbox))
-                depend_table(v.yaw.yaw_value_r, is_legacy and base_yaw_cond and ui.get(v.yaw.yaw) == "L/R", (v.yaw.lr_checkbox))
+                depend_table(v.yaw.yaw_value_l, is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.yaw.yaw) == "L/R", (v.yaw.lr_checkbox))
+                depend_table(v.yaw.yaw_value_r, is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.yaw.yaw) == "L/R", (v.yaw.lr_checkbox))
 
                 --depend_table(v.yaw.yaw_value_l, base_yaw_cond and is_legacy and ui.get(v.yaw.lr_checkbox))
                 --depend_table(v.yaw.yaw_value_r, base_yaw_cond and is_legacy and ui.get(v.yaw.lr_checkbox))
 
 
-                depend_table(v.yaw.delay_ways, is_legacy and base_yaw_cond and ui.get(v.yaw.add_ways))
+                depend_table(v.yaw.delay_ways, is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.yaw.add_ways))
 
-                depend_table(v.yaw.yaw_extra,    is_legacy and base_yaw_cond and contains(ui.get(v.yaw.additions), "Add-Ons"))
-                depend_table(v.yaw.label_extras,  is_legacy and base_yaw_cond and contains(ui.get(v.yaw.additions), "Add-Ons"))
-                depend_table(v.yaw.space3,        is_legacy and base_yaw_cond and contains(ui.get(v.yaw.additions), "Add-Ons"))
-                depend_table(v.yaw.randomize_delay,     is_legacy and base_yaw_cond)
+                depend_table(v.yaw.yaw_extra,    is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and contains(ui.get(v.yaw.additions), "Add-Ons"))
+                depend_table(v.yaw.label_extras,  is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and contains(ui.get(v.yaw.additions), "Add-Ons"))
+                depend_table(v.yaw.space3,        is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and contains(ui.get(v.yaw.additions), "Add-Ons"))
+                depend_table(v.yaw.randomize_delay,     is_legacy and not is_jitter and not is_dynamic and base_yaw_cond)
 
-                depend_table(v.yaw.randomize_delay_min, is_legacy and base_yaw_cond and ui.get(v.yaw.randomize_delay))
-                depend_table(v.yaw.randomize_delay_max, is_legacy and base_yaw_cond and ui.get(v.yaw.randomize_delay))
+                depend_table(v.yaw.randomize_delay_min, is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.yaw.randomize_delay))
+                depend_table(v.yaw.randomize_delay_max, is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.yaw.randomize_delay))
 
-                depend_table(v.yaw.delay1, is_legacy and base_yaw_cond and ui.get(v.yaw.delay_ways) >= 1 and not ui.get(v.yaw.randomize_delay))
+                depend_table(v.yaw.delay1, is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.yaw.delay_ways) >= 1 and not ui.get(v.yaw.randomize_delay))
 
-                depend_table(v.yaw.yaw_custom, is_legacy and base_yaw_cond and not contains(ui.get(v.yaw.additions), "Offset"))
-                depend_table(v.yaw.yaw,        is_legacy and base_yaw_cond and contains(ui.get(v.yaw.additions), "Offset"))
+                -- yaw_custom: always show in jitter/dynamic (only visible element), hide offset-based in custom
+                if is_jitter or is_dynamic then
+                    depend_table(v.yaw.yaw_custom, base_yaw_cond and is_legacy)
+                    depend_table(v.yaw.yaw,        false)
+                else
+                    depend_table(v.yaw.yaw_custom, is_legacy and base_yaw_cond and not contains(ui.get(v.yaw.additions), "Offset"))
+                    depend_table(v.yaw.yaw,        is_legacy and base_yaw_cond and contains(ui.get(v.yaw.additions), "Offset"))
+                end
 
+                depend_table(v.yaw.space1, base_yaw_cond and (is_defensive or is_legacy) and not is_jitter and not is_dynamic)
+                depend_table(v.hidden.yaw.yaw_value_l, is_defensive and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.hidden.yaw.yaw) == "L/R" and ui.get(v.exploit.hidden))
+                depend_table(v.hidden.yaw.yaw_value_r, is_defensive and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.hidden.yaw.yaw) == "L/R" and ui.get(v.exploit.hidden))
+                depend_table(v.yaw.yaw_jitter_value_l, is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.yaw.yaw_jitter) ~= "Off" and ui.get(v.yaw.yaw_jitter) ~= "X-Way")
+                depend_table(v.yaw.yaw_jitter_value_r, is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.yaw.yaw_jitter) ~= "Off" and ui.get(v.yaw.yaw_jitter) ~= "X-Way")
+                depend_table(v.yaw.xway_ways,  is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.yaw.yaw_jitter) == "X-Way")
+                depend_table(v.yaw.xway_angle, is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.yaw.yaw_jitter) == "X-Way")
 
-
-                depend_table(v.yaw.space1, base_yaw_cond and (is_defensive or is_legacy))
-                depend_table(v.hidden.yaw.yaw_value_l, is_defensive and base_yaw_cond and ui.get(v.hidden.yaw.yaw) == "L/R" and ui.get(v.exploit.hidden))
-                depend_table(v.hidden.yaw.yaw_value_r, is_defensive and base_yaw_cond and ui.get(v.hidden.yaw.yaw) == "L/R" and ui.get(v.exploit.hidden))
-                depend_table(v.yaw.yaw_jitter_value_l, is_legacy and not is_jitter and base_yaw_cond and ui.get(v.yaw.yaw_jitter) ~= "Off" and ui.get(v.yaw.yaw_jitter) ~= "X-Way")
-                depend_table(v.yaw.yaw_jitter_value_r, is_legacy and not is_jitter and base_yaw_cond and ui.get(v.yaw.yaw_jitter) ~= "Off" and ui.get(v.yaw.yaw_jitter) ~= "X-Way")
-                depend_table(v.yaw.xway_ways, is_legacy and not is_jitter and base_yaw_cond and ui.get(v.yaw.yaw_jitter) == "X-Way")
-                depend_table(v.yaw.xway_angle, is_legacy and not is_jitter and base_yaw_cond and ui.get(v.yaw.yaw_jitter) == "X-Way")
-
-
-                depend_table(v.hidden.yaw.yaw_value, is_defensive and base_yaw_cond and ui.get(v.hidden.yaw.yaw) == "Custom" and ui.get(v.exploit.hidden))
-
-                depend_table(v.hidden.yaw.delay, is_defensive and base_yaw_cond and ui.get(v.hidden.yaw.yaw) == "L/R" and ui.get(v.exploit.hidden))
-
-                depend_table(v.hidden.yaw.yaw, is_defensive and base_yaw_cond and ui.get(v.exploit.hidden))
-                
-                --depend_table(v.yaw.roll_degree, ui.get(menu.aa.state) == k and ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.type) == "Yaw" and ui.get(v.yaw.rolls) == "On")
+                depend_table(v.hidden.yaw.yaw_value, is_defensive and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.hidden.yaw.yaw) == "Custom" and ui.get(v.exploit.hidden))
+                depend_table(v.hidden.yaw.delay,     is_defensive and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.hidden.yaw.yaw) == "L/R" and ui.get(v.exploit.hidden))
+                depend_table(v.hidden.yaw.yaw,       is_defensive and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.exploit.hidden))
 
                 depend_table(v.pitch.pitch_value, ui.get(menu.aa.state) == k and ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.type) == "Pitch" and ui.get(v.pitch.pitch) == "Custom")
                 depend_table(v.hidden.pitch.pitch_value, ui.get(menu.aa.state) == k and ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.type) == "Pitch" and ui.get(v.hidden.pitch.pitch) == "Custom" and ui.get(v.exploit.hidden))
                 depend_table(v.hidden.pitch.pitch, ui.get(menu.aa.state) == k and ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.type) == "Pitch" and ui.get(v.exploit.hidden))
-                
 
-                depend_table(v.yaw.body_yaw_value_l,  is_legacy and not is_jitter and base_yaw_cond and ui.get(v.yaw.body_yaw) ~= "Off")
-                depend_table(v.yaw.body_yaw_value_r,  is_legacy and not is_jitter and base_yaw_cond and ui.get(v.yaw.body_yaw) ~= "Off")
-                
-                depend_table(v.yaw.yaw_extra_spin,      is_legacy and base_yaw_cond and contains(ui.get(v.yaw.yaw_extra),"Spin"))
-                depend_table(v.yaw.yaw_extra_sway,      is_legacy and base_yaw_cond and contains(ui.get(v.yaw.yaw_extra),"Sway"))
-                depend_table(v.yaw.yaw_extra_randomize, is_legacy and base_yaw_cond and contains(ui.get(v.yaw.yaw_extra),"Randomize"))
-                depend_table(v.yaw.yaw_extra_flick,     is_legacy and base_yaw_cond and contains(ui.get(v.yaw.yaw_extra),"Flick"))
+                depend_table(v.yaw.body_yaw_value_l, is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.yaw.body_yaw) ~= "Off")
+                depend_table(v.yaw.body_yaw_value_r, is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and ui.get(v.yaw.body_yaw) ~= "Off")
+
+                depend_table(v.yaw.yaw_extra_spin,      is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and contains(ui.get(v.yaw.yaw_extra),"Spin"))
+                depend_table(v.yaw.yaw_extra_sway,      is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and contains(ui.get(v.yaw.yaw_extra),"Sway"))
+                depend_table(v.yaw.yaw_extra_randomize, is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and contains(ui.get(v.yaw.yaw_extra),"Randomize"))
+                depend_table(v.yaw.yaw_extra_flick,     is_legacy and not is_jitter and not is_dynamic and base_yaw_cond and contains(ui.get(v.yaw.yaw_extra),"Flick"))
 
                 depend_table(v.exploit, ui.get(menu.aa.state) == k and ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.type) == "Exploit")
 
 
-                -- hider v2 (Jitter)
-
-                if is_jitter then   
-                    ui.set_visible(v.yaw.space1, false)
-                    ui.set_visible(v.yaw.additions, false)
-                    -- Modifier
-                    ui.set_visible(v.yaw.label_modifier, false)
-                    ui.set_visible(v.yaw.yaw_jitter, false)
-                    ui.set_visible(v.yaw.yaw_jitter_value_l, false)
-                    ui.set_visible(v.yaw.yaw_jitter_value_r, false)
-                    ui.set_visible(v.yaw.xway_ways, false)
-                    ui.set_visible(v.yaw.xway_angle, false)
-                    -- Desync
-                    ui.set_visible(v.yaw.label_body_yaw, false)
-                    ui.set_visible(v.yaw.body_yaw, false)
-                    ui.set_visible(v.yaw.body_yaw_value_l, false)
-                    ui.set_visible(v.yaw.body_yaw_value_r, false)
-                    -- Add-ons
-                    ui.set_visible(v.yaw.additions, false)
-                    ui.set_visible(v.yaw.space3, false)
-                    ui.set_visible(v.yaw.label_extras, false)
-                    ui.set_visible(v.yaw.yaw_extra, false)
-                    ui.set_visible(v.yaw.yaw_extra_spin, false)
-                    ui.set_visible(v.yaw.yaw_extra_sway, false)
-                    ui.set_visible(v.yaw.yaw_extra_randomize, false)
-                    ui.set_visible(v.yaw.yaw_extra_flick, false)
-                    -- Delay
-                    ui.set_visible(v.yaw.space4, false)
-                    ui.set_visible(v.yaw.label_switch, false)
-                    ui.set_visible(v.yaw.delay_mode, false)
-                    ui.set_visible(v.yaw.delay_ways, false)
-                    ui.set_visible(v.yaw.delay1, false)
-                    ui.set_visible(v.yaw.delay2, false)
-                    ui.set_visible(v.yaw.delay3, false)
-                    ui.set_visible(v.yaw.delay4, false)
-                    ui.set_visible(v.yaw.delay5, false)
-                    ui.set_visible(v.yaw.space5, false)
-                    ui.set_visible(v.yaw.add_ways, false)
-                end
-
-                -- hider v3 (Dynamic)
-
-                if is_dynamic then
-                    ui.set_visible(v.yaw.space1, false)
-                    ui.set_visible(v.yaw.additions, false)
-                    -- Modifier
-                    ui.set_visible(v.yaw.label_modifier, false)
-                    ui.set_visible(v.yaw.yaw_jitter, false)
-                    ui.set_visible(v.yaw.yaw_jitter_value_l, false)
-                    ui.set_visible(v.yaw.yaw_jitter_value_r, false)
-                    ui.set_visible(v.yaw.xway_ways, false)
-                    ui.set_visible(v.yaw.xway_angle, false)
-                    -- Desync
-                    ui.set_visible(v.yaw.label_body_yaw, false)
-                    ui.set_visible(v.yaw.body_yaw, false)
-                    ui.set_visible(v.yaw.body_yaw_value_l, false)
-                    ui.set_visible(v.yaw.body_yaw_value_r, false)
-                    -- Add-ons
-                    ui.set_visible(v.yaw.additions, false)
-                    ui.set_visible(v.yaw.space3, false)
-                    ui.set_visible(v.yaw.label_extras, false)
-                    ui.set_visible(v.yaw.yaw_extra, false)
-                    ui.set_visible(v.yaw.yaw_extra_spin, false)
-                    ui.set_visible(v.yaw.yaw_extra_sway, false)
-                    ui.set_visible(v.yaw.yaw_extra_randomize, false)
-                    ui.set_visible(v.yaw.yaw_extra_flick, false)
-                    -- Delay
-                    ui.set_visible(v.yaw.space4, false)
-                    ui.set_visible(v.yaw.label_switch, false)
-                    ui.set_visible(v.yaw.delay_mode, false)
-                    ui.set_visible(v.yaw.delay_ways, false)
-                    ui.set_visible(v.yaw.delay1, false)
-                    ui.set_visible(v.yaw.delay2, false)
-                    ui.set_visible(v.yaw.delay3, false)
-                    ui.set_visible(v.yaw.delay4, false)
-                    ui.set_visible(v.yaw.delay5, false)
-                    ui.set_visible(v.yaw.space5, false)
-                    ui.set_visible(v.yaw.add_ways, false)
-                end
+                -- jitter/dynamic: all yaw hidden by depend_table above, only yaw_custom shown
             else
                 ui.set_visible(v, ui.get(menu.tab) == "Anti-Aim's")
             end
@@ -2899,6 +2884,8 @@ end
         --depend_table(menu.features.visuals.custom_scope_thick,  in_vis_subtab)
         depend_table(menu.features.visuals.crosshair,           in_vis_subtab)
         depend_table(menu.features.visuals.logs,                in_vis_subtab)
+        depend_table(menu.features.visuals.manual_arrows,       in_vis_subtab)
+        depend_table(menu.features.visuals.manual_arrows_style, in_vis_subtab and ui.get(menu.features.visuals.manual_arrows))
         depend_table(menu.features.visuals.custom_watermark,    in_vis_subtab)
         depend_table(menu.features.visuals.animations,          in_vis_subtab)
         depend_table(menu.features.visuals.watermark_selection,     in_vis_subtab)
@@ -2952,22 +2939,74 @@ end
         depend_table({menu.aa.fakelag_amount ,menu.aa.fakelag_variance ,menu.aa.fakelag_limit},   ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.category) == "Settings")
         --depend_table({menu.aa.freestanding_checkbox,menu.aa.backward_checkbox,menu.aa.right_checkbox,menu.aa.left_checkbox,menu.aa.forward_checkbox},   ui.get(menu.tab) == "Anti-Aim's" and ui.get(menu.aa.category) == "Settings")
 
-        depend_table(menu.features.visuals.aspect_ratio_value, ui.get(menu.features.visuals.aspect_ratio_enable) and ui.get(menu.tab) == "Features")
+        depend_table(menu.features.visuals.aspect_ratio_value, in_vis_subtab and ui.get(menu.features.visuals.aspect_ratio_enable))
 
-        depend_table(menu.features.visuals.viewmodel_in_scope, ui.get(menu.features.visuals.viewmodel_enable) and ui.get(menu.tab) == "Features")
-        depend_table(menu.features.visuals.viewmodel_fov, ui.get(menu.features.visuals.viewmodel_enable) and ui.get(menu.tab) == "Features")
-        depend_table(menu.features.visuals.viewmodel_x,   ui.get(menu.features.visuals.viewmodel_enable) and ui.get(menu.tab) == "Features")
-        depend_table(menu.features.visuals.viewmodel_y,   ui.get(menu.features.visuals.viewmodel_enable) and ui.get(menu.tab) == "Features")
-        depend_table(menu.features.visuals.viewmodel_z,   ui.get(menu.features.visuals.viewmodel_enable) and ui.get(menu.tab) == "Features")
+        depend_table(menu.features.visuals.viewmodel_in_scope, in_vis_subtab and ui.get(menu.features.visuals.viewmodel_enable))
+        depend_table(menu.features.visuals.viewmodel_fov,      in_vis_subtab and ui.get(menu.features.visuals.viewmodel_enable))
+        depend_table(menu.features.visuals.viewmodel_x,        in_vis_subtab and ui.get(menu.features.visuals.viewmodel_enable))
+        depend_table(menu.features.visuals.viewmodel_y,        in_vis_subtab and ui.get(menu.features.visuals.viewmodel_enable))
+        depend_table(menu.features.visuals.viewmodel_z,        in_vis_subtab and ui.get(menu.features.visuals.viewmodel_enable))
 
-        local zoom_on  = ui.get(menu.features.visuals.zoom_anim_enable) and ui.get(menu.tab) == "Features"
-        depend_table(menu.features.visuals.zoom_anim_speed,  zoom_on)
-        depend_table(menu.features.visuals.zoom_anim_fov,    zoom_on)
+        local zoom_on = in_vis_subtab and ui.get(menu.features.visuals.zoom_anim_enable)
+        depend_table(menu.features.visuals.zoom_anim_speed, zoom_on)
+        depend_table(menu.features.visuals.zoom_anim_fov,   zoom_on)
+
+        local crosshair_on = in_vis_subtab and ui.get(menu.features.visuals.crosshair)
+        depend_table(menu.features.visuals.crosshair_type, crosshair_on)
+
+        local wm_on = in_vis_subtab and ui.get(menu.features.visuals.watermark_selection)
+        depend_table(menu.features.visuals.watermark_type, wm_on)
 
         --local scope_on = ui.get(menu.features.visuals.custom_scope_enable) and ui.get(menu.tab) == "Features"
         --depend_table(menu.features.visuals.custom_scope_size,  scope_on)
         --depend_table(menu.features.visuals.custom_scope_gap,   scope_on)
         --depend_table(menu.features.visuals.custom_scope_thick, scope_on)
+    end
+    -- Manual arrows: left/right indicator with dragging (horizontal only)
+    if ui.get(menu.features.visuals.manual_arrows) then
+        local style = ui.get(menu.features.visuals.manual_arrows_style)
+        local sym_l, sym_r
+        if     style == "Classic"  then sym_l, sym_r = "«", "»"
+        elseif style == "Rounded" then sym_l, sym_r = "⮜", "⮞"
+        elseif style == "Simple"   then sym_l, sym_r = "<", ">"
+        elseif style == "Block"   then sym_l, sym_r = "◀", "▶"
+        else                                sym_l, sym_r = "«", "»"
+        end
+
+        local clr_r2, clr_g2, clr_b2 = menu_r or 121, menu_g or 174, menu_b or 252
+        local is_left  = ui.get(menu.aa.left_checkbox)
+        local is_right = ui.get(menu.aa.right_checkbox)
+
+        arrow_anim_l   = interface.animate(arrow_anim_l,   is_left  and 1 or 0,  10)
+        arrow_anim_r   = interface.animate(arrow_anim_r,   is_right and 1 or 0,  10)
+        arrow_offset_l = interface.animate(arrow_offset_l, is_left  and -10 or 0, 10)
+        arrow_offset_r = interface.animate(arrow_offset_r, is_right and  10 or 0, 10)
+
+        -- dragging: horizontal only (lock Y to center)
+        arrow_drag.lock_y = screen_h / 2
+        arrow_drag.y      = screen_h / 2
+        arrow_drag.visible = true
+        dragging_system.set_width(arrow_drag, 140)
+        dragging_system.set_height(arrow_drag, 20)
+
+        local cx = arrow_drag.x + 70   -- center of drag zone
+        local cy = arrow_drag.y
+
+        if arrow_anim_l > 0.01 then
+            local a  = math.floor(255 * arrow_anim_l)
+            local ox = math.floor(arrow_offset_l)
+            renderer.text(cx - 55 + ox,      cy, clr_r2, clr_g2, clr_b2, a,                    "bc", 0, sym_l)
+            renderer.text(cx - 55 + ox - 14, cy, clr_r2, clr_g2, clr_b2, math.floor(a * 0.35), "bc", 0, sym_l)
+        end
+
+        if arrow_anim_r > 0.01 then
+            local a  = math.floor(255 * arrow_anim_r)
+            local ox = math.floor(arrow_offset_r)
+            renderer.text(cx + 55 + ox,      cy, clr_r2, clr_g2, clr_b2, a,                    "bc", 0, sym_r)
+            renderer.text(cx + 55 + ox + 14, cy, clr_r2, clr_g2, clr_b2, math.floor(a * 0.35), "bc", 0, sym_r)
+        end
+    else
+        arrow_drag.visible = false
     end
     logs.render()
     mouse_hold = client.key_state(0x01)
