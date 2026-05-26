@@ -11,7 +11,7 @@ local steamworks    = require('gamesense/steamworks')
 local localize      = require('gamesense/localize')
 local chat          = require('gamesense/chat')
 local surface       = require('gamesense/surface')
-local http          = require('gamesense/http')
+local images        = require('gamesense/images')
 local Session = {}
 Session.__index = Session
 
@@ -29,6 +29,10 @@ function Session:tag()           return string.format("[%s] %s", self.build, sel
 local lua = Session.new(_G.harmony_username or "admin", "Beta")
 local menu_r, menu_g, menu_b, menu_a = ui.get(ui.reference("MISC", "Settings", "Menu color"))
 local lua_color = string.format("\a%02X%02X%02X%02X", menu_r, menu_g, menu_b, menu_a)
+
+local avatar_texture = nil
+local avatar_loaded  = false
+local avatar_size    = 16
 local reference = {
     rage = {
         aimbot = {
@@ -480,6 +484,7 @@ menu = {
             crosshair_type      = aa_combo("\n\aCDCDCDFFCrosshair Indicator Selection", {"Modern", "Simple"}),
             watermark_selection = aa_checkbox("\aCDCDCDFFWatermark"),
             watermark_type      = aa_multi("\n\aCDCDCDFFWatermark Selection", {"Watermark", "Brand Watermark", "Text Watermark"}),
+            lwm_boxes_enabled   = aa_multi("\n\aCDCDCDFFLWM Boxes", {"Name", "FPS/MS", "Time", "Profile"}),
             custom_watermark    = other_checkbox("\aCDCDCDFFCustom Watermark"),
             prefix_label        = other_label("\aCDCDCDFFCustom Watermark Prefix"),
             custom_prefix       = other_textbox("\aCDCDCDFFCustom Watermark Prefix"),
@@ -973,7 +978,7 @@ end
 local mouse_click = false
 local mouse_hold = false
 function rec(x, y, w, h, radius, r, g, b, a)
-    radius = math.min(x/2, y/2, radius)
+    radius = math.min(w/2, h/2, radius)
     renderer.rectangle(x, y + radius, w, h - radius*2, r, g, b, a)
     renderer.rectangle(x + radius, y, w - radius*2, radius, r, g, b, a)
     renderer.rectangle(x + radius, y + h - radius, w - radius*2, radius, r, g, b, a)
@@ -1541,9 +1546,20 @@ local reorder_ctx_menu = {
     anim     = 0,
     open_up  = false,
     anchor_y = 0,
-    items    = {"Reorder Boxes"},
+    items    = {"Reorder Boxes", "Boxes"},
     w        = 140,
     item_h   = 22,
+}
+local boxes_submenu = {
+    open     = false,
+    closing  = false,
+    x        = 0,
+    anim     = 0,
+    open_up  = false,
+    anchor_y = 0,
+    w        = 130,
+    item_h   = 22,
+    items    = {"Name", "FPS/MS", "Time", "Profile"},
 }
 local arrow_ctx_menu = {
     open     = false,
@@ -1558,23 +1574,25 @@ local arrow_ctx_menu = {
 local drag_rmb_held = false
 
 local lwm
-local lwm_box_order     = {1, 2, 3}
+local lwm_box_order     = {1, 2, 3, 4}
 local lwm_reorder_mode  = false
 local lwm_drag_slot     = nil
 local lwm_drag_offset_x = 0
 local lwm_drag_offset_y = 0
 local lwm_lmb_held      = false
 local lwm_block_drag    = false
-local lwm_slot_x        = {0, 0, 0}
-local lwm_slot_w        = {0, 0, 0}
+local lwm_slot_x        = {0, 0, 0, 0}
+local lwm_slot_w        = {0, 0, 0, 0}
 local lwm_slot_h        = 0
 local lwm_slot_y        = 0
-local lwm_anim_x        = {nil, nil, nil}
+local lwm_anim_x        = {nil, nil, nil, nil}
+local prev_mouse_down = false
 
 function dragging_system.render()
     local screen_w, screen_h = client.screen_size()
     local mouse_x, mouse_y = ui.mouse_position()
     local mouse_down = client.key_state(1)
+    local mouse_just_clicked = mouse_down and not prev_mouse_down
     local mouse_rmb  = client.key_state(2)
     local realtime = globals.realtime()
 
@@ -1585,6 +1603,7 @@ function dragging_system.render()
         drag_ctx_menu.open    = false
         reorder_ctx_menu.open = false
         arrow_ctx_menu.open   = false
+        boxes_submenu.open    = false
         bg_alpha = 0
         menu_open_anim = interface.animate(menu_open_anim, 0, 10)
         if menu_open_anim > 0.01 then
@@ -1639,21 +1658,38 @@ function dragging_system.render()
                             mouse_x >= overflame_beta_ref.x and mouse_x <= overflame_beta_ref.x + overflame_beta_ref.w and
                             mouse_y >= overflame_beta_ref.y and mouse_y <= overflame_beta_ref.y + overflame_beta_ref.h + 24
                         if drag ~= overflame_beta_ref and not over_overflame then
-                            local _, screen_h = client.screen_size()
+                            local already_open = (drag_ctx_menu.open and drag_ctx_menu.drag == drag)
+                                or (arrow_ctx_menu.open and drag == arrow_drag)
+                            if already_open then
+                                drag_ctx_menu.open    = false; drag_ctx_menu.closing    = true
+                                reorder_ctx_menu.open = false; reorder_ctx_menu.closing = true
+                                arrow_ctx_menu.open   = false; arrow_ctx_menu.closing   = true
+                            else
+                            local screen_w, screen_h = client.screen_size()
                             local in_lower = drag.y + drag.h / 2 > screen_h / 2
                             if drag == arrow_drag then
+                                arrow_ctx_menu.w        = math.max(90, drag.w)
+                                local ax = math.min(drag.x, screen_w - arrow_ctx_menu.w - 2)
                                 arrow_ctx_menu.open     = true
                                 arrow_ctx_menu.closing  = false
-                                arrow_ctx_menu.x        = drag.x
+                                arrow_ctx_menu.x        = ax
                                 arrow_ctx_menu.open_up  = in_lower
                                 arrow_ctx_menu.anchor_y = in_lower and drag.y or (drag.y + drag.h + 4)
                                 arrow_ctx_menu.anim     = 0
                             else
+                                if drag == lwm then
+                                    local half = math.max(90, math.floor((drag.w - 4) / 2))
+                                    drag_ctx_menu.w    = half
+                                    reorder_ctx_menu.w = half
+                                else
+                                    drag_ctx_menu.w = math.max(90, drag.w)
+                                end
+                                local cx = math.min(drag.x, screen_w - drag_ctx_menu.w - 2)
                                 drag_ctx_menu.items    = {"Default", "Custom"}
                                 drag_ctx_menu.open     = true
                                 drag_ctx_menu.closing  = false
                                 drag_ctx_menu.drag     = drag
-                                drag_ctx_menu.x        = drag.x
+                                drag_ctx_menu.x        = cx
                                 drag_ctx_menu.open_up  = in_lower
                                 drag_ctx_menu.anchor_y = in_lower and drag.y or (drag.y + drag.h + 4)
                                 drag_ctx_menu.anim     = 0
@@ -1661,7 +1697,7 @@ function dragging_system.render()
                                     reorder_ctx_menu.open     = true
                                     reorder_ctx_menu.closing  = false
                                     reorder_ctx_menu.drag     = drag
-                                    reorder_ctx_menu.x        = drag.x + drag_ctx_menu.w + 4
+                                    reorder_ctx_menu.x        = cx + drag_ctx_menu.w + 4
                                     reorder_ctx_menu.open_up  = in_lower
                                     reorder_ctx_menu.anchor_y = in_lower and drag.y or (drag.y + drag.h + 4)
                                     reorder_ctx_menu.anim     = 0
@@ -1670,6 +1706,7 @@ function dragging_system.render()
                                     reorder_ctx_menu.closing = false
                                 end
                             end
+                            end -- else (not already_open)
                         end
                     end
                 end
@@ -1677,6 +1714,7 @@ function dragging_system.render()
         end
     end
     drag_rmb_held = mouse_rmb
+    prev_mouse_down = mouse_down
 
     for i, drag in pairs(dragging_system.draggings) do
         if drag.visible or (drag.visible_anim and drag.visible_anim > 0.01) or (drag == arrow_drag) then
@@ -1868,7 +1906,8 @@ function dragging_system.render()
         local clr    = {menu_r or 121, menu_g or 174, menu_b or 252}
         local pad_x  = 10
         local pad_y  = 5
-        local total_h = pad_y * 2 + #ctx.items * ctx.item_h
+        local items  = {"Reorder Boxes", "Boxes"}
+        local total_h = pad_y * 2 + #items * ctx.item_h
 
         if not ctx.open then
             ctx.anim = interface.animate(ctx.anim, 0, 14)
@@ -1905,14 +1944,14 @@ function dragging_system.render()
 
         local _, th = renderer.measure_text("b", "A")
 
-        for i, name in ipairs(ctx.items) do
+        for i, name in ipairs(items) do
             local iy = by + pad_y + (i - 1) * ctx.item_h
             if iy + ctx.item_h > by + render_h then break end
 
             local item_hovered = ctx.open and mouse_x >= bx and mouse_x <= bx + ctx.w
                 and mouse_y >= iy and mouse_y <= iy + ctx.item_h
 
-            local active = lwm_reorder_mode and name == "Reorder Boxes"
+            local active = (name == "Reorder Boxes" and lwm_reorder_mode)
 
             if active then
                 rec(bx + 3, iy + 1, ctx.w - 6, ctx.item_h - 2, 3, clr[1], clr[2], clr[3], math.floor(28 * ctx.anim))
@@ -1929,23 +1968,160 @@ function dragging_system.render()
             local label_y = iy + math.floor((ctx.item_h - th) / 2)
             renderer.text(bx + pad_x + 6, label_y, tr, tg, tb, alpha, "b", 0, name)
 
+            if name == "Boxes" then
+                local arrow_sym = "›"
+                local aw = renderer.measure_text("b", arrow_sym)
+                renderer.text(bx + ctx.w - pad_x - aw - 2, label_y, tr, tg, tb, alpha, "b", 0, arrow_sym)
+
+                if item_hovered and ctx.open and mouse_just_clicked then
+                    if not boxes_submenu.open then
+                        local sw, sh = client.screen_size()
+                        boxes_submenu.open     = true
+                        boxes_submenu.closing  = false
+                        boxes_submenu.x        = bx + ctx.w + 4
+                        boxes_submenu.open_up  = ctx.open_up
+                        boxes_submenu.anchor_y = ctx.anchor_y
+                        boxes_submenu.anim     = boxes_submenu.anim or 0
+                        if boxes_submenu.x + boxes_submenu.w > sw - 2 then
+                            boxes_submenu.x = bx - boxes_submenu.w - 4
+                        end
+                    end
+                end
+            end
+
             if item_hovered and mouse_down then
                 if name == "Reorder Boxes" and ctx.drag == lwm then
                     lwm_reorder_mode = not lwm_reorder_mode
                     lwm_block_drag = true
                 end
-                reorder_ctx_menu.open = false; reorder_ctx_menu.closing = true
-                drag_ctx_menu.open = false; drag_ctx_menu.closing = true
+                if name ~= "Boxes" then
+                    reorder_ctx_menu.open = false; reorder_ctx_menu.closing = true
+                    drag_ctx_menu.open = false; drag_ctx_menu.closing = true
+                    boxes_submenu.open = false; boxes_submenu.closing = true
+                end
             end
         end
 
-        local outside = not (mouse_x >= bx and mouse_x <= bx + ctx.w
-            and mouse_y >= by and mouse_y <= by + total_h)
-        if outside and mouse_down then
+        local over_reorder = mouse_x >= bx and mouse_x <= bx + ctx.w and mouse_y >= by and mouse_y <= by + total_h
+        local sub_bx = boxes_submenu.x
+        local sub_by_approx = ctx.open_up and (ctx.anchor_y - (pad_y*2 + 4*ctx.item_h) - 4) or ctx.anchor_y
+        local over_submenu = boxes_submenu.open and
+            mouse_x >= sub_bx and mouse_x <= sub_bx + boxes_submenu.w and
+            mouse_y >= sub_by_approx - 40 and mouse_y <= sub_by_approx + (pad_y*2 + 4*ctx.item_h) + 40
+
+        if not over_reorder and not over_submenu and ctx.open then
+            boxes_submenu.open = false; boxes_submenu.closing = true
+        end
+
+        local outside = not over_reorder
+        if outside and not over_submenu and mouse_down then
             reorder_ctx_menu.open = false; reorder_ctx_menu.closing = true
             drag_ctx_menu.open = false; drag_ctx_menu.closing = true
+            boxes_submenu.open = false; boxes_submenu.closing = true
         end
     end
+
+    if boxes_submenu.open or boxes_submenu.closing then
+        local ctx   = boxes_submenu
+        local clr   = {menu_r or 121, menu_g or 174, menu_b or 252}
+        local pad_x = 10
+        local pad_y = 5
+        local items = {"Name", "FPS/MS", "Time", "Profile"}
+        local total_h = pad_y * 2 + #items * ctx.item_h
+
+        if not ctx.open then
+            ctx.anim = interface.animate(ctx.anim, 0, 14)
+            if ctx.anim < 0.01 then ctx.closing = false end
+        else
+            ctx.anim = interface.animate(ctx.anim, 1, 16)
+        end
+
+        local alpha   = math.floor(255 * ctx.anim)
+        local slide   = math.floor((1 - ctx.anim) * total_h)
+        local bx = ctx.x
+        local by
+        if ctx.open_up then
+            by = ctx.anchor_y - total_h - 4 + slide
+        else
+            by = ctx.anchor_y + slide
+        end
+
+        for gi = 4, 1, -1 do
+            local ga = math.floor(20 * (1 - gi / 4) * ctx.anim)
+            rec_outline(bx - gi, by - gi, ctx.w + gi * 2, total_h + gi * 2, 5 + gi, 1, {clr[1], clr[2], clr[3], ga})
+        end
+
+        rec(bx, by, ctx.w, total_h, 4, 16, 16, 16, alpha)
+        rec_outline(bx,     by,     ctx.w,     total_h,     4, 1, {8,  8,  8,  alpha})
+        rec_outline(bx + 1, by + 1, ctx.w - 2, total_h - 2, 4, 1, {50, 50, 50, alpha})
+
+        local lw = ctx.w - pad_x * 2
+        renderer.gradient(bx + pad_x,          by + total_h - 2, lw / 2, 2,
+            clr[1], clr[2], clr[3], 0,   clr[1], clr[2], clr[3], math.floor(100 * ctx.anim), true)
+        renderer.gradient(bx + pad_x + lw / 2, by + total_h - 2, lw / 2, 2,
+            clr[1], clr[2], clr[3], math.floor(100 * ctx.anim), clr[1], clr[2], clr[3], 0,   true)
+
+        local _, th = renderer.measure_text("b", "A")
+        local cur_boxes = (menu.features and menu.features.visuals and menu.features.visuals.lwm_boxes_enabled)
+            and ui.get(menu.features.visuals.lwm_boxes_enabled) or {}
+
+        for i, name in ipairs(items) do
+            local iy = by + pad_y + (i - 1) * ctx.item_h
+            local item_hovered = ctx.open and mouse_x >= bx and mouse_x <= bx + ctx.w
+                and mouse_y >= iy and mouse_y <= iy + ctx.item_h
+
+            local enabled = false
+            for _, v in ipairs(cur_boxes) do
+                if v == name then enabled = true; break end
+            end
+
+            local cb_size = 10
+            local cb_x = bx + pad_x + 2
+            local cb_y = iy + math.floor((ctx.item_h - cb_size) / 2)
+
+            if enabled then
+                rec(cb_x, cb_y, cb_size, cb_size, 2, clr[1], clr[2], clr[3], math.floor(200 * ctx.anim))
+                renderer.line(cb_x + 2, cb_y + 5, cb_x + 4, cb_y + 7, 255, 255, 255, alpha)
+                renderer.line(cb_x + 4, cb_y + 7, cb_x + 8, cb_y + 3, 255, 255, 255, alpha)
+            else
+                rec_outline(cb_x, cb_y, cb_size, cb_size, 2, 1, {80, 80, 80, alpha})
+            end
+
+            if item_hovered then
+                rec(bx + 3, iy + 1, ctx.w - 6, ctx.item_h - 2, 3, 255, 255, 255, math.floor(8 * ctx.anim))
+            end
+
+            local label_y = iy + math.floor((ctx.item_h - th) / 2)
+            local tr = enabled and clr[1] or (item_hovered and 200 or 120)
+            local tg = enabled and clr[2] or (item_hovered and 200 or 120)
+            local tb = enabled and clr[3] or (item_hovered and 200 or 120)
+            renderer.text(bx + pad_x + cb_size + 8, label_y, tr, tg, tb, alpha, "b", 0, name)
+
+            if item_hovered and mouse_just_clicked then
+                local new_sel = {}
+                if enabled then
+                    for _, v in ipairs(cur_boxes) do
+                        if v ~= name then table.insert(new_sel, v) end
+                    end
+                else
+                    for _, v in ipairs(cur_boxes) do table.insert(new_sel, v) end
+                    table.insert(new_sel, name)
+                end
+                if #new_sel == 0 then
+                    new_sel = {name}
+                end
+                pcall(function() ui.set(menu.features.visuals.lwm_boxes_enabled, table.unpack(new_sel)) end)
+            end
+        end
+
+        local over_sub = mouse_x >= bx and mouse_x <= bx + ctx.w and mouse_y >= by and mouse_y <= by + total_h
+        local over_reorder_menu = reorder_ctx_menu.open and
+            mouse_x >= reorder_ctx_menu.x and mouse_x <= reorder_ctx_menu.x + reorder_ctx_menu.w
+        if not over_sub and not over_reorder_menu and mouse_down then
+            boxes_submenu.open = false; boxes_submenu.closing = true
+        end
+    end
+
 
     if arrow_ctx_menu.open or arrow_ctx_menu.closing then
         local ctx   = arrow_ctx_menu
@@ -2047,7 +2223,16 @@ end
 local cwm = dragging_system.create_drag(912, 50, 200, 30,   "This element is draggable!")
 local bwm = dragging_system.create_drag(912, 50, 200, 30,   "This element is draggable!")
 bwm.label_bottom = true
-lwm = dragging_system.create_drag(865, 1045, 200, 30, "This element is draggable!")
+local _lwm_sw = select(1, client.screen_size()); lwm = dragging_system.create_drag(math.floor(_lwm_sw), 10, 200, 30, "This element is draggable!")
+do
+    local saved_order = pcall(function()
+        local db = database.read("overflame_lwm_order")
+        if db and type(db) == "table" and #db == 4 then
+            lwm_box_order = db
+        end
+    end)
+end
+lwm.label_bottom = true
 local xhair_wm = dragging_system.create_drag(960, 580, 80, 20, "This element is draggable!")
 xhair_wm.lock_x = 960
 local overflame_beta = dragging_system.create_drag(15, 500, 0, 0, "")
@@ -2107,6 +2292,24 @@ client.set_event_callback("paint_ui", function()
     overflame_beta.visible = wm_enabled and contains(ui.get(menu.features.visuals.watermark_type), "Text Watermark")
 
    if lwm.visible then
+        if not lwm_boxes_initialized then
+            lwm_boxes_initialized = true
+            pcall(function()
+                local cur = ui.get(menu.features.visuals.lwm_boxes_enabled)
+                if not cur or #cur == 0 then
+                    ui.set(menu.features.visuals.lwm_boxes_enabled, "Name", "FPS/MS", "Time", "Profile")
+                end
+            end)
+        end
+
+        local _sw, _sh = client.screen_size()
+        if lwm.y + lwm.h > _sh then
+            lwm.y = math.max(0, _sh - lwm.h - 10)
+        end
+        if lwm.x + lwm.w > _sw then
+            lwm.x = math.max(0, _sw - lwm.w - 10)
+        end
+
         local h, m, s = client.system_time()
         local time_str = string.format("%02d:%02d", h, m)
         local local_player = entity.get_local_player()
@@ -2172,7 +2375,7 @@ client.set_event_callback("paint_ui", function()
         local fw_lbl1    = renderer.measure_text("", fps_label)
         local fw_val2    = renderer.measure_text("b", ms_val)
         local fw_lbl2    = renderer.measure_text("", ms_label)
-        local block2_w   = pad + fw_val1 + 3 + fw_lbl1 + pad + fw_val2 + 3 + fw_lbl2 + pad
+        local block2_w   = math.max(80, pad + fw_val1 + 3 + fw_lbl1 + pad + fw_val2 + 3 + fw_lbl2 + pad)
 
         local tw         = renderer.measure_text("b", time_str)
         local block3_w   = pad + tw + pad
@@ -2206,30 +2409,75 @@ client.set_event_callback("paint_ui", function()
             draw_pulse_line(bx_, by_, bw_, bh_)
         end
 
-        local block_widths = { block1_w, block2_w, block3_w }
+        local nick_text = lua:display()
+        local nick_w = renderer.measure_text("b", nick_text)
+        local block4_w = pad + nick_w + 4 + avatar_size + pad
 
-        local ordered_widths = {
-            block_widths[lwm_box_order[1]],
-            block_widths[lwm_box_order[2]],
-            block_widths[lwm_box_order[3]],
+        if not avatar_loaded then
+            local lp = entity.get_local_player()
+            if lp then
+                avatar_loaded = true
+                local steamid64 = entity.get_steam64(lp)
+                avatar_texture = images.get_steam_avatar(steamid64)
+            end
+        end
+
+        local boxes_enabled = ui.get(menu.features.visuals.lwm_boxes_enabled)
+        local box_visible = {
+            contains(boxes_enabled, "Name"),
+            contains(boxes_enabled, "FPS/MS"),
+            contains(boxes_enabled, "Time"),
+            contains(boxes_enabled, "Profile"),
         }
-        local real_total_w = ordered_widths[1] + gap + ordered_widths[2] + gap + ordered_widths[3]
+
+        local all_block_widths = { block1_w, block2_w, block3_w, block4_w }
+
+        local visible_slots = {}
+        for slot = 1, 4 do
+            local cid = lwm_box_order[slot]
+            if box_visible[cid] then
+                table.insert(visible_slots, slot)
+            end
+        end
+
+        local ordered_widths = { block1_w, block2_w, block3_w, block4_w }
+        for i = 1, 4 do
+            ordered_widths[i] = all_block_widths[lwm_box_order[i]]
+        end
+
+        local real_total_w = 0
+        local first_vis = true
+        for slot = 1, 4 do
+            local cid = lwm_box_order[slot]
+            if box_visible[cid] then
+                if not first_vis then real_total_w = real_total_w + gap end
+                real_total_w = real_total_w + ordered_widths[slot]
+                first_vis = false
+            end
+        end
+        if real_total_w == 0 then real_total_w = block1_w end
         dragging_system.set_width(lwm, real_total_w)
 
-        lwm_slot_x[1] = lx
-        lwm_slot_x[2] = lx + ordered_widths[1] + gap
-        lwm_slot_x[3] = lx + ordered_widths[1] + gap + ordered_widths[2] + gap
-        lwm_slot_w[1] = ordered_widths[1]
-        lwm_slot_w[2] = ordered_widths[2]
-        lwm_slot_w[3] = ordered_widths[3]
+        local cur_x = lx
+        for slot = 1, 4 do
+            local cid = lwm_box_order[slot]
+            if box_visible[cid] then
+                lwm_slot_x[slot] = cur_x
+                lwm_slot_w[slot] = ordered_widths[slot]
+                cur_x = cur_x + ordered_widths[slot] + gap
+            else
+                lwm_slot_x[slot] = lx
+                lwm_slot_w[slot] = 0
+            end
+        end
         lwm_slot_h = block_h
         lwm_slot_y = ly
 
         if lwm_reorder_mode then
             local lmb = client.key_state(0x01)
             if not lwm_lmb_held and lmb and not drag_ctx_menu.open and not reorder_ctx_menu.open then
-                for slot = 1, 3 do
-                    if mouse_x >= lwm_slot_x[slot] and mouse_x <= lwm_slot_x[slot] + lwm_slot_w[slot] and
+                for slot = 1, 4 do
+                    if lwm_slot_w[slot] > 0 and mouse_x >= lwm_slot_x[slot] and mouse_x <= lwm_slot_x[slot] + lwm_slot_w[slot] and
                        mouse_y >= ly and mouse_y <= ly + block_h then
                         lwm_drag_slot     = slot
                         lwm_drag_offset_x = mouse_x - lwm_slot_x[slot]
@@ -2241,12 +2489,14 @@ client.set_event_callback("paint_ui", function()
             if not lmb and lwm_drag_slot then
                 local drop_slot = nil
                 local min_dist  = math.huge
-                for slot = 1, 3 do
+                for slot = 1, 4 do
+                    if lwm_slot_w[slot] > 0 then
                     local sx = lwm_slot_x[slot] + lwm_slot_w[slot] / 2
                     local dist = math.abs(mouse_x - sx)
                     if dist < min_dist then
                         min_dist  = dist
                         drop_slot = slot
+                    end
                     end
                 end
                 if drop_slot and drop_slot ~= lwm_drag_slot then
@@ -2256,6 +2506,7 @@ client.set_event_callback("paint_ui", function()
                     local tmp = lwm_box_order[lwm_drag_slot]
                     lwm_box_order[lwm_drag_slot] = lwm_box_order[drop_slot]
                     lwm_box_order[drop_slot] = tmp
+                    pcall(function() database.write("overflame_lwm_order", lwm_box_order) end)
                 end
                 lwm_drag_slot = nil
             end
@@ -2264,8 +2515,9 @@ client.set_event_callback("paint_ui", function()
             lwm_lmb_held = client.key_state(0x01)
         end
 
-        for slot = 1, 3 do
+        for slot = 1, 4 do
             local content_id = lwm_box_order[slot]
+            if not box_visible[content_id] then goto continue_slot end
             local bw = ordered_widths[slot]
             local is_dragging = lwm_reorder_mode and lwm_drag_slot == slot and client.key_state(0x01)
 
@@ -2274,10 +2526,12 @@ client.set_event_callback("paint_ui", function()
             if lwm_reorder_mode and lwm_drag_slot and lwm_drag_slot ~= slot then
                 local drop_slot = nil
                 local min_dist2 = math.huge
-                for s2 = 1, 3 do
+                for s2 = 1, 4 do
+                    if lwm_slot_w[s2] > 0 then
                     local sx2 = lwm_slot_x[s2] + lwm_slot_w[s2] / 2
                     local d2 = math.abs(mouse_x - sx2)
                     if d2 < min_dist2 then min_dist2 = d2; drop_slot = s2 end
+                    end
                 end
                 if drop_slot == slot then
                     target_x = lwm_slot_x[lwm_drag_slot]
@@ -2335,7 +2589,34 @@ client.set_event_callback("paint_ui", function()
                 local hw = renderer.measure_text("b", hh_str)
                 renderer.text(tx,      cy2, 230, 230, 230, 255, "b", 0, hh_str)
                 renderer.text(tx + hw, cy2, clr[1], clr[2], clr[3], 200, "b", 0, mm_str)
+
+            elseif content_id == 4 then
+                local av_y = by_ + math.floor((block_h - avatar_size) / 2)
+                local gx = bx_ + pad
+                local nick_str = nick_text
+                for ci = 1, #nick_str do
+                    local ch    = nick_str:sub(ci, ci)
+                    local wave  = math.sin(realtime * 2.5 + ci * 0.4) * 0.5 + 0.5
+                    local nr    = math.floor(clr[1] + (255 - clr[1]) * wave)
+                    local ng    = math.floor(clr[2] + (255 - clr[2]) * wave)
+                    local nb    = math.floor(clr[3] + (255 - clr[3]) * wave)
+                    renderer.text(gx, cy2, nr, ng, nb, 255, "b", 0, ch)
+                    gx = gx + renderer.measure_text("b", ch)
+                end
+                if avatar_texture then
+                    local ax = bx_ + pad + nick_w + 4
+                    local r2 = math.floor(avatar_size / 2)
+                    avatar_texture:draw(ax, av_y, avatar_size, avatar_size, 255, 255, 255, 255)
+                    -- hide square corners with bg-colored recs, then draw outline on top
+                    local cr = 4
+                    renderer.rectangle(ax,                    av_y,                    cr, cr, 20, 20, 20, 255)
+                    renderer.rectangle(ax + avatar_size - cr, av_y,                    cr, cr, 20, 20, 20, 255)
+                    renderer.rectangle(ax,                    av_y + avatar_size - cr, cr, cr, 20, 20, 20, 255)
+                    renderer.rectangle(ax + avatar_size - cr, av_y + avatar_size - cr, cr, cr, 20, 20, 20, 255)
+                    renderer.circle_outline(ax + r2, av_y + r2, 20, 20, 20, 255, r2 + 1, 0, 1, 3)
+                end
             end
+            ::continue_slot::
         end
     end
     if (lua_maslo > 0.01) then
@@ -2955,6 +3236,7 @@ end
 
         local wm_on = in_vis_subtab and ui.get(menu.features.visuals.watermark_selection)
         depend_table(menu.features.visuals.watermark_type, wm_on)
+        depend_table(menu.features.visuals.lwm_boxes_enabled, wm_on and contains(ui.get(menu.features.visuals.watermark_type), "Watermark"))
 
     end
 
@@ -4377,6 +4659,16 @@ client.set_event_callback("paint_ui", function()
     local wm_active = contains(ui.get(menu.features.visuals.watermark_type), "Text Watermark") and ui.get(menu.features.visuals.watermark_selection)
     overflame_beta_anim = interface.animate(overflame_beta_anim, wm_active and 1 or 0, 10)
 
+    do
+        local font = beta_font_modes[beta_font_mode]
+        local text1 = "Overflame"
+        local text2 = " / " .. lua:display()
+        local w1 = renderer.measure_text(font, text1)
+        local w2 = renderer.measure_text(font, text2)
+        dragging_system.set_width(overflame_beta, w1 + w2 + 10)
+        dragging_system.set_height(overflame_beta, 19)
+    end
+
     if overflame_beta_anim < 0.01 then
         font_ctx_menu.open = false
         pos_ctx_menu.open  = false
@@ -4887,7 +5179,6 @@ local function render_wm_ctx(ctx, items, mx, my, is_font)
         if is_font then
             active = (i == beta_font_mode)
         else
-            -- i==1 = Default, i==2 = Custom
             local is_default = false
             for idx, d in pairs(dragging_system.draggings) do
                 if d == overflame_beta then
